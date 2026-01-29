@@ -22,7 +22,7 @@ data:
   
   # 数据处理
   normalize: true
-  add_derived_features: true
+  add_derived_features: false
   shuffle: true
 
 # 模型配置（保持不变）

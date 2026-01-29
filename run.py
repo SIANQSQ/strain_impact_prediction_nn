@@ -45,7 +45,7 @@ def main():
     
     # 加载配置
     print(f"加载配置: {args.config}")
-    with open(args.config, 'r') as f:
+    with open(args.config, 'r',  encoding='utf-8') as f:
         config = yaml.safe_load(f)
     
     # 覆盖配置参数

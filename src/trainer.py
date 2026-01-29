@@ -10,38 +10,51 @@ from datetime import datetime
 from typing import Dict, Tuple, List, Optional
 from tqdm import tqdm
 
+class SimpleLoss(nn.Module):
+    """简化损失函数"""
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.loss_weights = config.get('training', {}).get('loss_weights', {'position': 0.6, 'force': 0.4})
+        self.mse_loss = nn.MSELoss()
+        self.mae_loss = nn.L1Loss()
+    
+    def forward(self, pred_position, pred_force, target_position, target_force):
+        position_loss = self.mse_loss(pred_position, target_position)
+        force_loss = self.mse_loss(pred_force, target_force)
+        total_loss = (self.loss_weights['position'] * position_loss + 
+                     self.loss_weights['force'] * force_loss)
+        
+        return {
+            'total': total_loss,
+            'position': position_loss,
+            'force': force_loss,
+            'position_mae': self.mae_loss(pred_position, target_position),
+            'force_mae': self.mae_loss(pred_force, target_force)
+        }
+
 class StrainForceTrainer:
     """
-    应变到力神经网络的训练器
+    应变到力神经网络的训练器（简化版本）
     """
     
     def __init__(self, config: dict):
-        """
-        初始化训练器
-        
-        参数:
-            config: 配置字典
-        """
         self.config = config
         self.training_config = config.get('training', {})
         self.experiment_config = config.get('experiment', {})
         
-        # 设置设备
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"使用设备: {self.device}")
         
-        # 创建输出目录
         self.experiment_name = self.experiment_config.get('name', 'strain_force_experiment')
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self._create_directories()
         
-        # 初始化模型、损失函数、优化器
         self.model = None
-        self.criterion = None
+        self.criterion = SimpleLoss(config)  # 使用简化损失函数
         self.optimizer = None
         self.scheduler = None
         
-        # 训练历史
         self.history = {
             'train_loss': [], 'val_loss': [],
             'train_position_loss': [], 'val_position_loss': [],
@@ -49,7 +62,6 @@ class StrainForceTrainer:
             'learning_rate': []
         }
         
-        # TensorBoard
         if self.experiment_config.get('use_tensorboard', False):
             self.writer = SummaryWriter(f"{self.experiment_config.get('log_dir', 'logs')}/{self.timestamp}")
         else:
@@ -58,171 +70,101 @@ class StrainForceTrainer:
         print(f"训练器初始化完成 - 实验: {self.experiment_name}")
     
     def _create_directories(self):
-        """创建输出目录"""
         directories = ['models', 'results', 'logs', 'results/figures']
-        
         for directory in directories:
             os.makedirs(directory, exist_ok=True)
-        
         print("输出目录创建完成")
     
     def setup_model(self, model: nn.Module):
-        """
-        设置模型
-        
-        参数:
-            model: 神经网络模型
-        """
         self.model = model.to(self.device)
         
-        # 损失函数
-        self.criterion = PhysicsInformedLoss(self.config)
-        
-        # 优化器
         optimizer_name = self.training_config.get('optimizer', 'AdamW')
         learning_rate = self.training_config.get('learning_rate', 0.001)
         weight_decay = self.training_config.get('weight_decay', 0.0001)
         
         if optimizer_name == 'AdamW':
-            self.optimizer = optim.AdamW(
-                self.model.parameters(),
-                lr=learning_rate,
-                weight_decay=weight_decay
-            )
+            self.optimizer = optim.AdamW(self.model.parameters(), lr=learning_rate, weight_decay=weight_decay)
         elif optimizer_name == 'Adam':
-            self.optimizer = optim.Adam(
-                self.model.parameters(),
-                lr=learning_rate,
-                weight_decay=weight_decay
-            )
+            self.optimizer = optim.Adam(self.model.parameters(), lr=learning_rate, weight_decay=weight_decay)
         elif optimizer_name == 'SGD':
-            self.optimizer = optim.SGD(
-                self.model.parameters(),
-                lr=learning_rate,
-                momentum=0.9,
-                weight_decay=weight_decay
-            )
+            self.optimizer = optim.SGD(self.model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=weight_decay)
         
         # 学习率调度器
         scheduler_name = self.training_config.get('scheduler', 'ReduceLROnPlateau')
         
-        if scheduler_name == 'ReduceLROnPlateau':
+        if scheduler_name.lower() == 'none' or scheduler_name.lower() == 'false':
+            self.scheduler = None
+            print("不使用学习率调度器")
+        elif scheduler_name == 'ReduceLROnPlateau':
+            # 确保所有参数都是浮点数
+            factor = float(self.training_config.get('scheduler_factor', 0.5))
+            patience = int(self.training_config.get('scheduler_patience', 10))
+            min_lr = float(self.training_config.get('min_lr', 0.000001))
+            
             self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
                 self.optimizer,
                 mode='min',
-                factor=self.training_config.get('scheduler_factor', 0.5),
-                patience=self.training_config.get('scheduler_patience', 10),
-                min_lr=self.training_config.get('min_lr', 1e-6),
+                factor=factor,
+                patience=patience,
+                min_lr=min_lr,
                 verbose=True
             )
         elif scheduler_name == 'CosineAnnealing':
+            T_max = int(self.training_config.get('epochs', 100))
             self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
                 self.optimizer,
-                T_max=self.training_config.get('epochs', 100)
+                T_max=T_max
             )
         
         print(f"模型设置完成: {optimizer_name}优化器, {scheduler_name}调度器")
     
-    def create_dataloaders(self, datasets: Dict[str, Tuple[np.ndarray, np.ndarray]]) -> Dict[str, DataLoader]:
-        """
-        创建DataLoader
-        
-        参数:
-            datasets: 数据集字典
-            
-        返回:
-            DataLoader字典
-        """
+    def create_dataloaders(self, datasets):
         batch_size = self.training_config.get('batch_size', 32)
-        
         dataloaders = {}
         
         for name, (X, y) in datasets.items():
-            # 转换为张量
             X_tensor = torch.tensor(X, dtype=torch.float32)
             y_tensor = torch.tensor(y, dtype=torch.float32)
-            
-            # 创建数据集
             dataset = TensorDataset(X_tensor, y_tensor)
-            
-            # 创建DataLoader
             shuffle = (name == 'train')
-            dataloader = DataLoader(
-                dataset,
-                batch_size=batch_size,
-                shuffle=shuffle,
-                num_workers=0,
-                pin_memory=True
-            )
-            
+            dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
             dataloaders[name] = dataloader
             
             print(f"{name} DataLoader: {len(dataset)} 个样本, {len(dataloader)} 个批次")
         
         return dataloaders
     
-    def train_epoch(self, dataloader: DataLoader) -> Dict[str, float]:
-        """
-        训练一个epoch
-        
-        参数:
-            dataloader: 训练DataLoader
-            
-        返回:
-            训练指标字典
-        """
+    def train_epoch(self, dataloader):
         self.model.train()
-        
-        epoch_losses = {
-            'total': 0.0, 'position': 0.0, 'force': 0.0,
-            'physics': 0.0, 'position_mae': 0.0, 'force_mae': 0.0
-        }
-        
+        epoch_losses = {'total': 0.0, 'position': 0.0, 'force': 0.0}
         n_batches = len(dataloader)
         
-        # 使用tqdm显示进度
         pbar = tqdm(dataloader, desc="训练", leave=False)
-        
         for batch_X, batch_y in pbar:
-            # 移动到设备
             batch_X = batch_X.to(self.device)
             batch_y = batch_y.to(self.device)
             
-            # 分离位置和力标签
             target_position = batch_y[:, :2]
             target_force = batch_y[:, 2:]
             
-            # 前向传播
             self.optimizer.zero_grad()
             pred_position, pred_force = self.model(batch_X)
             
-            # 计算损失
-            losses = self.criterion(pred_position, pred_force, 
-                                   target_position, target_force)
-            
-            # 反向传播
+            losses = self.criterion(pred_position, pred_force, target_position, target_force)
             losses['total'].backward()
             
-            # 梯度裁剪
             gradient_clip = self.training_config.get('gradient_clip', 1.0)
             if gradient_clip > 0:
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), gradient_clip)
             
-            # 优化步骤
             self.optimizer.step()
             
-            # 累计损失
             for key in epoch_losses:
                 if key in losses:
                     epoch_losses[key] += losses[key].item()
             
-            # 更新进度条
-            pbar.set_postfix({
-                'loss': losses['total'].item(),
-                'pos_mae': losses['position_mae'].item()
-            })
+            pbar.set_postfix({'loss': losses['total'].item()})
         
-        # 计算平均损失
         for key in epoch_losses:
             epoch_losses[key] /= n_batches
         

@@ -6,9 +6,15 @@
 import os
 import sys
 import numpy as np
-
+# 获取当前脚本所在的目录
+script_dir = os.path.dirname(os.path.abspath(__file__))
+# 获取项目根目录（假设scripts在项目根目录下）
+project_root = os.path.dirname(script_dir)
+# 将src目录添加到sys.path
+src_path = os.path.join(project_root, 'src')
+sys.path.append(src_path)
 # 添加src目录到路径
-sys.path.append('src')
+# sys.path.append('src')
 
 def main():
     """主函数"""
