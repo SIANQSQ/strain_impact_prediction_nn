@@ -1,15 +1,18 @@
-# 数据配置
+# 数据配置 - 按事件分组
 data:
   # 输入文件路径
-  input_csv: "data/raw/abaqus_strain_data.csv"
+  input_csv: "data/raw/strain_data.csv"
   
-  # 特征和标签列名
-  feature_columns: ["strain_top", "strain_bottom", "strain_left", "strain_right"]
-  label_columns: ["force_x", "force_y", "force_magnitude"]
+  # 数据列名配置
+  event_id_column: "event_id"           # 事件ID列名
+  time_column: "time_step"              # 时间步列名
+  feature_columns: ["strain_top", "strain_bottom", "strain_left", "strain_right"]  # 特征列
+  label_columns: ["force_x", "force_y", "force_magnitude"]  # 标签列
   
   # 序列参数
-  sequence_length: 20
-  step_size: 1
+  sequence_length: 100                   # 每个事件的固定时间步数
+  pad_mode: "edge"                      # 填充模式: edge, zero, mean, constant
+  truncate_mode: "end"                  # 截断模式: start, end, random
   
   # 数据集划分
   train_ratio: 0.7
@@ -22,84 +25,60 @@ data:
   add_derived_features: true
   shuffle: true
 
-# 模型配置
+# 模型配置（保持不变）
 model:
-  # 模型选择
-  model_type: "CNN_LSTM"  # 可选: "CNN_LSTM", "Transformer", "SimpleMLP"
-  
-  # CNN配置
+  model_type: "CNN_LSTM"
   cnn_channels: [32, 64, 128]
   cnn_kernel_sizes: [3, 3, 3]
   cnn_padding: "same"
   cnn_dropout: 0.2
   
-  # LSTM配置
   lstm_hidden_size: 128
   lstm_num_layers: 2
   lstm_bidirectional: true
   lstm_dropout: 0.3
   
-  # Transformer配置
-  transformer_d_model: 128
-  transformer_nhead: 8
-  transformer_num_layers: 3
-  
-  # MLP配置
   mlp_hidden_layers: [256, 128, 64]
   mlp_dropout: 0.3
   
-  # 输出层
   position_head_hidden: [64, 32]
   force_head_hidden: [64, 32]
   
-  # 初始化
   weight_init: "xavier_normal"
 
-# 训练配置
+# 训练配置（保持不变）
 training:
-  # 基础参数
   epochs: 200
   batch_size: 32
   learning_rate: 0.001
   weight_decay: 0.0001
   
-  # 损失函数权重
   loss_weights:
     position: 0.6
     force: 0.4
     
-  # 优化器
   optimizer: "AdamW"
   scheduler: "ReduceLROnPlateau"
   scheduler_patience: 10
   scheduler_factor: 0.5
   min_lr: 1e-6
   
-  # 训练控制
   gradient_clip: 1.0
   patience: 20
   min_delta: 0.001
   
-  # 正则化
   dropout: 0.3
   batch_norm: true
 
-# 实验配置
+# 实验配置（保持不变）
 experiment:
-  # 实验名称
-  name: "strain_to_force_experiment"
-  
-  # 保存设置
+  name: "event_strain_to_force_experiment"
   save_model: true
   save_checkpoints: true
   checkpoint_frequency: 10
-  
-  # 日志设置
   use_tensorboard: true
   log_dir: "logs"
   verbose: true
-  
-  # 结果保存
   save_predictions: true
   save_figures: true
   figure_dpi: 150
